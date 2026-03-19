@@ -1,0 +1,444 @@
+--- a/chrome/browser/ui/layout_constants.cc
++++ b/chrome/browser/ui/layout_constants.cc
+@@ -80,11 +80,11 @@ int GetLayoutConstant(LayoutConstant constant) {
+     case LayoutConstant::kTabCloseButtonSize:
+       return touch_ui ? 24 : 16;
+     case LayoutConstant::kTabHeight:
+-      return 34 + GetLayoutConstant(LayoutConstant::kTabstripToolbarOverlap);
++      return 28 + GetLayoutConstant(LayoutConstant::kTabstripToolbarOverlap);
+     case LayoutConstant::kTabStripHeight:
+       return GetLayoutConstant(LayoutConstant::kTabHeight) +
+              GetLayoutConstant(LayoutConstant::kTabStripPadding);
+     case LayoutConstant::kTabStripPadding:
+-      return 6;
++      return 0;
+     case LayoutConstant::kTabSeparatorHeight:
+       return touch_ui ? 24 : 20;
+--- a/chrome/browser/ui/tabs/tab_style.cc
++++ b/chrome/browser/ui/tabs/tab_style.cc
+@@ -23,9 +23,13 @@ constexpr int kChromeRefreshSeparatorHorizontalMargin = 2;
+ // TODO (crbug.com/1451400): This constant should be in LayoutConstants.
+ constexpr int kChromeRefreshSeparatorHeight = 16;
+ 
+-// The padding from the top of the tab to the content area.
+-constexpr int kChromeRefreshTabVerticalPadding = 6;
+-constexpr int kChromeRefreshTabHorizontalPadding = 8;
++// Content padding matching the legacy v68 Material Design layout.
++// v68 GetLayoutInsets(TAB) = {1, 16}: 1 DIP vertical, 16 DIP horizontal.
++constexpr int kChromeRefreshTabVerticalPadding = 1;
++constexpr int kChromeRefreshTabHorizontalPadding = 16;
+ 
+-// The standard tab width is 232 DIP, excluding separators and overlap.
+-constexpr int kTabWidth = 232;
++// The standard tab width matches v68's physical tab width of 209 DIP
++// (v68: TAB_STANDARD_WIDTH=193 net + GetOverlap()=16 endcap = 209 DIP total).
++// With GetBottomCornerRadius()=11: GetStandardWidth()=187+2*11=209,
++// GetTabOverlap()=2*11-6=16 (matching v68's ceil(15.5 DIP endcap) overlap).
++constexpr int kTabWidth = 187;
+@@ -93,8 +97,8 @@ int TabStyle::GetTopCornerRadius() const {
+   return 10;
+ }
+ 
+ int TabStyle::GetBottomCornerRadius() const {
+-  return 12;
++  return 11;
+ }
+ 
+ int TabStyle::GetTabOverlap() const {
+--- a/chrome/browser/ui/views/tabs/tab_style_views.cc
++++ b/chrome/browser/ui/views/tabs/tab_style_views.cc
+@@ -200,297 +200,102 @@ SkPath TabStyleViewsImpl::GetPath(TabStyle::PathType path_type,
+                                   float scale,
+                                   const TabPathFlags& flags) const {
+   CHECK(tab());
+   const int stroke_thickness = GetStrokeThickness(flags.force_active);
+ 
+-  const TabStyle::TabSelectionState state = GetSelectionState();
+-
+-  // We'll do the entire path calculation in aligned pixels.
+-  // TODO(dfried): determine if we actually want to use `stroke_thickness` as
+-  // the inset in this case.
+-  gfx::RectF aligned_bounds =
+-      ScaleAndAlignBounds(tab()->bounds(), scale, stroke_thickness);
+-
+-  // Calculate the corner radii. Note that corner radius is based on original
+-  // tab width (in DIP), not our new, scaled-and-aligned bounds.
+-  float content_corner_radius =
+-      GetTopCornerRadiusForWidth(tab()->width()) * scale;
+-  float extension_corner_radius = tab_style()->GetBottomCornerRadius() * scale;
+-
+-  const float separator_overlap = (tab_style()->GetSeparatorMargins().width() +
+-                                   tab_style()->GetSeparatorSize().width()) *
+-                                  scale;
+-
+-  // Selected, hover, and inactive tab fills are a detached squarcle tab.
+-  if ((path_type == TabStyle::PathType::kFill &&
+-       state != TabStyle::TabSelectionState::kActive) ||
+-      path_type == TabStyle::PathType::kHighlight ||
+-      path_type == TabStyle::PathType::kInteriorClip ||
+-      path_type == TabStyle::PathType::kHitTest) {
+-    float top_left_corner_radius = content_corner_radius;
+-    float top_right_corner_radius = content_corner_radius;
+-    float bottom_left_corner_radius = content_corner_radius;
+-    float bottom_right_corner_radius = content_corner_radius;
+-    float tab_height = GetLayoutConstant(LayoutConstant::kTabHeight) * scale;
+-
+-    // The tab displays favicon animations that can emerge from the toolbar. The
+-    // interior clip needs to extend the entire height of the toolbar to support
+-    // this. Detached tab shapes do not need to respect this.
+-    if (path_type != TabStyle::PathType::kInteriorClip &&
+-        path_type != TabStyle::PathType::kHitTest) {
+-      tab_height -= GetLayoutConstant(LayoutConstant::kTabStripPadding) * scale;
+-      tab_height -=
+-          GetLayoutConstant(LayoutConstant::kTabstripToolbarOverlap) * scale;
+-    }
+-
+-    // Don't round the bottom corners to avoid creating dead space between tabs.
+-    if (path_type == TabStyle::PathType::kHitTest) {
+-      bottom_left_corner_radius = 0;
+-      bottom_right_corner_radius = 0;
+-    }
+-
+-    float left = aligned_bounds.x() + extension_corner_radius;
+-    int top = aligned_bounds.y() +
+-              GetLayoutConstant(LayoutConstant::kTabStripPadding) * scale;
+-    float right = aligned_bounds.right() - extension_corner_radius;
+-    const int bottom = top + tab_height;
+-
+-    BrowserFrameView* const browser_frame_view = GetBrowserFrameView();
+-    const bool is_frame_condensed =
+-        browser_frame_view ? browser_frame_view->IsFrameCondensed() : false;
+-    // For maximized and full screen windows, extend the tab hit test to the top
+-    // of the tab, encompassing the top padding. This makes it easy to click on
+-    // tabs by moving the mouse to the top of the screen.
+-    if (path_type == TabStyle::PathType::kHitTest && is_frame_condensed) {
+-      top -= GetLayoutConstant(LayoutConstant::kTabStripPadding) * scale;
+-      // Don't round the top corners to avoid creating dead space between tabs.
+-      top_left_corner_radius = 0;
+-      top_right_corner_radius = 0;
+-    }
+-
+-    // While the tab is closing do not add extra space as it degrades the close
+-    // tab annimation.
+-    if (!tab()->closing()) {
+-      // If the size of the space for the path is smaller than the size of a
+-      // favicon, if we are building a path for the hit test, or if we are
+-      // building a path for a split tab, expand to take the entire width of the
+-      // separator margins AND the separator.
+-      const bool limited_tab_space =
+-          (right - left) < (gfx::kFaviconSize * scale);
+-      const bool expand_into_left_separator =
+-          limited_tab_space || path_type == TabStyle::PathType::kHitTest ||
+-          IsRightSplitTab(tab());
+-      const bool expand_into_right_separator =
+-          limited_tab_space || path_type == TabStyle::PathType::kHitTest ||
+-          IsLeftSplitTab(tab());
+-      if (expand_into_left_separator) {
+-        left -= separator_overlap / 2.0;
+-      }
+-      if (expand_into_right_separator) {
+-        right += separator_overlap / 2.0;
+-      }
+-    }
+-
+-    if (tab()->split().has_value()) {
+-      if (IsLeftSplitTab(tab())) {
+-        top_right_corner_radius = 0;
+-        bottom_right_corner_radius = 0;
+-      } else if (IsRightSplitTab(tab())) {
+-        top_left_corner_radius = 0;
+-        bottom_left_corner_radius = 0;
+-      }
+-    }
+-
+-    // Radii are clockwise from top left.
+-    const SkVector radii[4] = {
+-        SkVector(top_left_corner_radius, top_left_corner_radius),
+-        SkVector(top_right_corner_radius, top_right_corner_radius),
+-        SkVector(bottom_right_corner_radius, bottom_right_corner_radius),
+-        SkVector(bottom_left_corner_radius, bottom_left_corner_radius)};
+-
+-    SkPathBuilder path;
+-    path.addRRect(SkRRect::MakeRectRadii(
+-        SkRect::MakeLTRB(left, top, right, bottom), radii));
+-
+-    // Convert path to be relative to the tab origin.
+-    gfx::PointF origin(tab()->origin());
+-    origin.Scale(scale);
+-    path.offset(-origin.x(), -origin.y());
+-
+-    // Possibly convert back to DIPs.
+-    if (flags.render_units == TabStyle::RenderUnits::kDips && scale != 1.0f) {
+-      path.transform(SkMatrix::Scale(1.0f / scale, 1.0f / scale));
+-    }
+-
+-    return path.detach();
+-  }
+-
+-  // Compute `extension` as the width outside the separators.  This is a fixed
+-  // value equal to the normal corner radius.
+-  const float extension = extension_corner_radius;
+-  float top_left_corner_radius = content_corner_radius;
+-  float top_right_corner_radius = content_corner_radius;
+-
+-  // Calculate the bounds of the actual path.
+-  const float left = aligned_bounds.x();
+-  const float right = aligned_bounds.right();
+-  float tab_top = aligned_bounds.y() +
+-                  GetLayoutConstant(LayoutConstant::kTabStripPadding) * scale;
+-  float tab_left = left + extension;
+-  float tab_right = right - extension;
+-
+-  // Overlap the toolbar below us so that gaps don't occur when rendering at
+-  // non-integral display scale factors.
+-  const float extended_bottom = aligned_bounds.bottom();
+-  const float bottom_extension =
+-      GetLayoutConstant(LayoutConstant::kTabstripToolbarOverlap) * scale;
+-  float tab_bottom = extended_bottom - bottom_extension;
+-
+-  // Path-specific adjustments:
+-  const float stroke_adjustment = stroke_thickness * scale;
+-  if (path_type == TabStyle::PathType::kFill ||
+-      path_type == TabStyle::PathType::kBorder) {
+-    if (!IsRightSplitTab(tab())) {
+-      tab_left += 0.5f * stroke_adjustment;
+-    }
+-    if (!IsLeftSplitTab(tab())) {
+-      tab_right -= 0.5f * stroke_adjustment;
+-    }
+-    tab_top += 0.5f * stroke_adjustment;
+-    content_corner_radius -= 0.5f * stroke_adjustment;
+-    tab_bottom -= 0.5f * stroke_adjustment;
+-    extension_corner_radius -= 0.5f * stroke_adjustment;
+-  }
+-  const bool compact_left_to_bottom = ShouldCompactLeadingEdge(path_type);
+-
+-  float left_extension_corner_radius = extension_corner_radius;
+-  if (compact_left_to_bottom) {
+-    left_extension_corner_radius =
+-        (tab_style()->GetBottomCornerRadius() -
+-         GetLayoutConstant(LayoutConstant::kToolbarCornerRadius)) *
+-        scale;
+-  }
+-
+-  if (IsLeftSplitTab(tab())) {
+-    top_right_corner_radius = 0;
+-    // Assign half of the tab overlap to each of the split tabs.
+-    tab_right = tab_right + extension - separator_overlap / 2.0;
+-    extension_corner_radius = 0;
+-  } else if (IsRightSplitTab(tab())) {
+-    top_left_corner_radius = 0;
+-    tab_left = tab_left - extension + separator_overlap / 2.0;
+-    left_extension_corner_radius = 0;
+-  }
+-
+-  SkPathBuilder path;
+-  // Avoid mallocs at every new path verb by preallocating an
+-  // empirically-determined amount of space in the verb and point buffers.
+-  const int kMaxPathPoints = 20;
+-  path.incReserve(kMaxPathPoints);
+-
+-  // We will go clockwise from the lower left. We start in the overlap region,
+-  // preventing a gap between toolbar and tabstrip.
+-  // TODO(dfried): verify that the we actually want to start the stroke for
+-  // the exterior path outside the region; we might end up rendering an
+-  // extraneous descending pixel on displays with odd scaling and nonzero
+-  // stroke width.
+-
+-  if (path_type == TabStyle::PathType::kBorder && tab()->split() &&
+-      !IsLeftSplitTab(tab())) {
+-    // Start with the top left side of the shape.
+-    path.moveTo(left, tab_top);
+-  } else {
+-    // Start with the left side of the shape.
+-    path.moveTo(left, extended_bottom);
+-
+-    // Draw the left edge of the extension.
+-    //   ╭─────────╮
+-    //   │ Content │
+-    // ┏─╯         ╰─┐
+-    if (tab_bottom != extended_bottom) {
+-      if (flags.should_paint_extension) {
+-        path.lineTo(left, tab_bottom);
+-      } else {
+-        path.moveTo(left, tab_bottom);
+-      }
+-    }
+-
+-    // Draw the bottom-left corner.
+-    //   ╭─────────╮
+-    //   │ Content │
+-    // ┌━╝         ╰─┐
+-    path.lineTo(tab_left - left_extension_corner_radius, tab_bottom);
+-    path.arcTo(
+-        SkVector(left_extension_corner_radius, left_extension_corner_radius), 0,
+-        SkPathBuilder::kSmall_ArcSize, SkPathDirection::kCCW,
+-        SkPoint(tab_left, tab_bottom - left_extension_corner_radius));
+-
+-    // Draw the ascender and top-left curve.
+-    //   ╔─────────╮
+-    //   ┃ Content │
+-    // ┌─╯         ╰─┐
+-    path.lineTo(tab_left, tab_top + top_left_corner_radius);
+-    path.arcTo(SkVector(top_left_corner_radius, top_left_corner_radius), 0,
+-               SkPathBuilder::kSmall_ArcSize, SkPathDirection::kCW,
+-               SkPoint(tab_left + top_left_corner_radius, tab_top));
+-  }
+-
+-  // Draw the top crossbar.
+-  //   ╭━━━━━━━━━╮
+-  //   │ Content │
+-  // ┌─╯         ╰─┐
+-  path.lineTo(tab_right - top_right_corner_radius, tab_top);
+-
+-  if (path_type == TabStyle::PathType::kBorder && tab()->split() &&
+-      !IsRightSplitTab(tab())) {
+-    // Finish to the top right corner.
+-    path.lineTo(right, tab_top);
+-  } else {
+-    // Draw the top-right curve.
+-    //   ╭─────────╗
+-    //   │ Content │
+-    // ┌─╯         ╰─┐
+-    path.arcTo(SkVector(top_right_corner_radius, top_right_corner_radius), 0,
+-               SkPathBuilder::kSmall_ArcSize, SkPathDirection::kCW,
+-               SkPoint(tab_right, tab_top + top_right_corner_radius));
+-
+-    // Draw the descender and bottom-right corner.
+-    //   ╭─────────╮
+-    //   │ Content ┃
+-    // ┌─╯         ╚━┐
+-    path.lineTo(tab_right, tab_bottom - extension_corner_radius);
+-    path.arcTo(SkVector(extension_corner_radius, extension_corner_radius), 0,
+-               SkPathBuilder::kSmall_ArcSize, SkPathDirection::kCCW,
+-               SkPoint(tab_right + extension_corner_radius, tab_bottom));
+-    if (tab_bottom != extended_bottom) {
+-      path.lineTo(right, tab_bottom);
+-    }
+-
+-    // Draw anything remaining: the descender, the bottom right horizontal
+-    // stroke, or the right edge of the extension, depending on which
+-    // conditions fired above.
+-    //   ╭─────────╮
+-    //   │ Content │
+-    // ┌─╯         ╰─┓
+-    if (flags.should_paint_extension) {
+-      path.lineTo(right, extended_bottom);
+-    }
+-  }
+-
+-  if (path_type != TabStyle::PathType::kBorder) {
+-    path.close();
+-  }
+-
+-  // Convert path to be relative to the tab origin.
+-  gfx::PointF origin(tab_->origin());
+-  origin.Scale(scale);
+-  path.offset(-origin.x(), -origin.y());
+-
+-  // Possibly convert back to DIPs.
+-  if (flags.render_units == TabStyle::RenderUnits::kDips && scale != 1.0f) {
+-    path.transform(SkMatrix::Scale(1.0f / scale, 1.0f / scale));
+-  }
+-
+-  return path.detach();
++  // Legacy Material Design tab shape from Chromium v68.
++  // Uses cubic Bezier S-curves on each side to create the characteristic
++  // trapezoidal "wing" shape where tabs smoothly transition into the toolbar.
++  //
++  //         ╭──────────────────────╮
++  //        ╱   Tab Title            ╲
++  // ──────╱                          ╲──────
++  //
++  // Width of the S-curve endcap on each side of the tab, in DIP.
++  // Equals GetLayoutInsets(TAB).left() - 0.5 = 16 - 0.5 = 15.5 DIP in v68.
++  constexpr float kEndcapWidthDip = 15.5f;
++  const float s = scale;
++  const float e = kEndcapWidthDip * s;
++
++  const gfx::RectF aligned_bounds =
++      ScaleAndAlignBounds(tab()->bounds(), scale, stroke_thickness);
++
++  const float left = aligned_bounds.x();
++  const float right = aligned_bounds.right();
++  // In v68, the top of the path was offset by (scale - 1) device pixels to
++  // align with the 1-device-pixel stroke along the tab's top edge.
++  const float top = aligned_bounds.y() + (s - 1.0f);
++  const float bottom = aligned_bounds.bottom();
++
++  // Clamp the endcap so it cannot exceed half the tab width, preventing the
++  // left and right S-curves from crossing on very narrow tabs.
++  const float half_width = (right - left) / 2.0f;
++  const float clamped_e = std::min(e, half_width);
++
++  BrowserFrameView* const browser_frame_view = GetBrowserFrameView();
++  const bool is_frame_condensed =
++      browser_frame_view ? browser_frame_view->IsFrameCondensed() : false;
++
++  SkPathBuilder path;
++  path.incReserve(20);
++
++  if (path_type == TabStyle::PathType::kHitTest && is_frame_condensed) {
++    // In maximized/fullscreen mode, square off the top of the hit-test path to
++    // the screen edge, eliminating any gap between adjacent tabs at the top.
++    path.moveTo(left, bottom);
++    path.lineTo(left, aligned_bounds.y());
++    path.lineTo(right, aligned_bounds.y());
++    path.lineTo(right, bottom);
++    path.close();
++  } else {
++    // Standard legacy S-curve path, drawn clockwise from the bottom-left.
++    path.moveTo(left, bottom);
++    // Drop 1 device pixel below the toolbar baseline (intentionally not scaled
++    // by `s` since it represents 1 absolute device pixel, creating a sharp
++    // anti-aliased edge between tab and toolbar at any scale factor).
++    path.lineTo(left, bottom - 1.0f);
++    // Bottom-left S-curve: from horizontal baseline upward.
++    // The Bezier control points (0.75, 1.625, 2.0 DIP horizontally;
++    // 0, 0.5, 1.5 DIP vertically) are taken directly from v68's
++    // GetBorderPath() and define the characteristic smooth S-curve.
++    path.cubicTo(left + 0.75f * s,                         bottom - 1.0f,
++                 left + 1.625f * s,                        bottom - 1.0f - 0.5f * s,
++                 left + 2.0f * s,                          bottom - 1.0f - 1.5f * s);
++    // Left diagonal rising toward the top-left curve.
++    path.lineTo(left + (kEndcapWidthDip - 2.0f) * s,      top + 1.5f * s);
++    // Top-left S-curve: from diagonal to horizontal tab-top.
++    path.cubicTo(left + (kEndcapWidthDip - 1.625f) * s,   top + 0.5f * s,
++                 left + (kEndcapWidthDip - 0.75f) * s,    top,
++                 left + clamped_e,                         top);
++    // Horizontal top edge.
++    path.lineTo(right - clamped_e,                         top);
++    // Top-right S-curve (mirror of top-left).
++    path.cubicTo(right - (kEndcapWidthDip - 0.75f) * s,   top,
++                 right - (kEndcapWidthDip - 1.625f) * s,  top + 0.5f * s,
++                 right - (kEndcapWidthDip - 2.0f) * s,    top + 1.5f * s);
++    // Right diagonal descending toward the bottom-right curve.
++    path.lineTo(right - 2.0f * s,                          bottom - 1.0f - 1.5f * s);
++    // Bottom-right S-curve (mirror of bottom-left).
++    path.cubicTo(right - 1.625f * s,                       bottom - 1.0f - 0.5f * s,
++                 right - 0.75f * s,                        bottom - 1.0f,
++                 right,                                    bottom - 1.0f);
++    // Rise 1 device pixel back to the toolbar baseline, mirroring the drop at
++    // the bottom-left. The closed shape spans from bottom (baseline) on both
++    // sides, with the 1px drop/rise creating a sharp crisp edge.
++    path.lineTo(right, bottom);
++
++    if (path_type != TabStyle::PathType::kBorder) {
++      path.close();
++    }
++  }
++
++  // Convert path to be relative to the tab origin.
++  gfx::PointF origin(tab_->origin());
++  origin.Scale(scale);
++  path.offset(-origin.x(), -origin.y());
++
++  // Possibly convert back to DIPs.
++  if (flags.render_units == TabStyle::RenderUnits::kDips && scale != 1.0f) {
++    path.transform(SkMatrix::Scale(1.0f / scale, 1.0f / scale));
++  }
++
++  return path.detach();
+ }
+ 
+ gfx::Insets TabStyleViewsImpl::GetContentsInsets() const {
