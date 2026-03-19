@@ -16,7 +16,7 @@
        return touch_ui ? 24 : 20;
 --- a/chrome/browser/ui/tabs/tab_style.cc
 +++ b/chrome/browser/ui/tabs/tab_style.cc
-@@ -23,9 +23,9 @@ constexpr int kChromeRefreshSeparatorHorizontalMargin = 2;
+@@ -23,9 +23,13 @@ constexpr int kChromeRefreshSeparatorHorizontalMargin = 2;
  // TODO (crbug.com/1451400): This constant should be in LayoutConstants.
  constexpr int kChromeRefreshSeparatorHeight = 16;
  
@@ -24,13 +24,27 @@
 -constexpr int kChromeRefreshTabVerticalPadding = 6;
 -constexpr int kChromeRefreshTabHorizontalPadding = 8;
 +// Content padding matching the legacy v68 Material Design layout.
++// v68 GetLayoutInsets(TAB) = {1, 16}: 1 DIP vertical, 16 DIP horizontal.
 +constexpr int kChromeRefreshTabVerticalPadding = 1;
-+constexpr int kChromeRefreshTabHorizontalPadding = 4;
++constexpr int kChromeRefreshTabHorizontalPadding = 16;
  
 -// The standard tab width is 232 DIP, excluding separators and overlap.
 -constexpr int kTabWidth = 232;
-+// The standard tab width gives a 193 DIP total (169 + 2*12), matching v68.
-+constexpr int kTabWidth = 169;
++// The standard tab width matches v68's physical tab width of 209 DIP
++// (v68: TAB_STANDARD_WIDTH=193 net + GetOverlap()=16 endcap = 209 DIP total).
++// With GetBottomCornerRadius()=11: GetStandardWidth()=187+2*11=209,
++// GetTabOverlap()=2*11-6=16 (matching v68's ceil(15.5 DIP endcap) overlap).
++constexpr int kTabWidth = 187;
+@@ -93,8 +97,8 @@ int TabStyle::GetTopCornerRadius() const {
+   return 10;
+ }
+ 
+ int TabStyle::GetBottomCornerRadius() const {
+-  return 12;
++  return 11;
+ }
+ 
+ int TabStyle::GetTabOverlap() const {
 --- a/chrome/browser/ui/views/tabs/tab_style_views.cc
 +++ b/chrome/browser/ui/views/tabs/tab_style_views.cc
 @@ -200,297 +200,102 @@ SkPath TabStyleViewsImpl::GetPath(TabStyle::PathType path_type,
@@ -380,6 +394,9 @@
 +    // anti-aliased edge between tab and toolbar at any scale factor).
 +    path.lineTo(left, bottom - 1.0f);
 +    // Bottom-left S-curve: from horizontal baseline upward.
++    // The Bezier control points (0.75, 1.625, 2.0 DIP horizontally;
++    // 0, 0.5, 1.5 DIP vertically) are taken directly from v68's
++    // GetBorderPath() and define the characteristic smooth S-curve.
 +    path.cubicTo(left + 0.75f * s,                         bottom - 1.0f,
 +                 left + 1.625f * s,                        bottom - 1.0f - 0.5f * s,
 +                 left + 2.0f * s,                          bottom - 1.0f - 1.5f * s);
